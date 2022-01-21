@@ -12,7 +12,7 @@ sys.path.append(PARENT_DIR)
 from nn_models import MLP
 from hnn import HNN
 from data import get_dataset
-from utils import L2_loss, to_pickle, from_pickle
+from utils import L2_loss, to_pickle, from_pickle, get_model_parm_nums
 
 def get_args():
     parser = argparse.ArgumentParser(description=None)
@@ -30,6 +30,8 @@ def get_args():
     parser.add_argument('--field_type', default='solenoidal', type=str, help='type of vector field to learn')
     parser.add_argument('--seed', default=0, type=int, help='random seed')
     parser.add_argument('--save_dir', default=THIS_DIR, type=str, help='where to save the trained model')
+    parser.add_argument('--gpu_enable', dest='gpu_enable', action='store_true', help='include if gpu is to be used')
+    parser.add_argument('--gpu_select', default=0, type=int, help='select which gpu to use')
     parser.set_defaults(feature=True)
     return parser.parse_args()
 
@@ -38,22 +40,28 @@ def train(args):
   torch.manual_seed(args.seed)
   np.random.seed(args.seed)
 
+  device = torch.device('cuda:' + str(args.gpu_select) if args.gpu_enable else 'cpu')
+
   # init model and optimizer
   if args.verbose:
     print("Training baseline model:" if args.baseline else "Training HNN model:")
 
   output_dim = args.input_dim if args.baseline else 2
-  nn_model = MLP(args.input_dim, args.hidden_dim, output_dim, args.nonlinearity)
+  nn_model = MLP(args.input_dim, args.hidden_dim, output_dim, args.nonlinearity).to(device)
   model = HNN(args.input_dim, differentiable_model=nn_model,
-            field_type=args.field_type, baseline=args.baseline)
+            field_type=args.field_type, baseline=args.baseline, device = device)
+
+  num_parm = get_model_parm_nums(model)
+  print('model contains {} parameters'.format(num_parm))
+
   optim = torch.optim.Adam(model.parameters(), args.learn_rate, weight_decay=0)
 
   # arrange data
   data = get_dataset(args.name, args.save_dir, verbose=True)
-  x = torch.tensor( data['coords'], requires_grad=True, dtype=torch.float32)
-  test_x = torch.tensor( data['test_coords'], requires_grad=True, dtype=torch.float32)
-  dxdt = torch.Tensor(data['dcoords'])
-  test_dxdt = torch.Tensor(data['test_dcoords'])
+  x = torch.tensor( data['coords'], requires_grad=True, dtype=torch.float32).to(device)
+  test_x = torch.tensor( data['test_coords'], requires_grad=True, dtype=torch.float32).to(device)
+  dxdt = torch.Tensor(data['dcoords']).to(device)
+  test_dxdt = torch.Tensor(data['test_dcoords']).to(device)
 
   # vanilla train loop
   stats = {'train_loss': [], 'test_loss': []}
@@ -62,7 +70,7 @@ def train(args):
     # train step
     ixs = torch.randperm(x.shape[0])[:args.batch_size]
     dxdt_hat = model.time_derivative(x[ixs])
-    dxdt_hat += args.input_noise * torch.randn(*x[ixs].shape) # add noise, maybe
+    dxdt_hat += args.input_noise * torch.randn(*x[ixs].shape).to(device) # add noise, maybe
     loss = L2_loss(dxdt[ixs], dxdt_hat)
     loss.backward()
     grad = torch.cat([p.grad.flatten() for p in model.parameters()]).clone()
@@ -71,7 +79,7 @@ def train(args):
     # run test data
     test_ixs = torch.randperm(test_x.shape[0])[:args.batch_size]
     test_dxdt_hat = model.time_derivative(test_x[test_ixs])
-    test_dxdt_hat += args.input_noise * torch.randn(*test_x[test_ixs].shape) # add noise, maybe
+    test_dxdt_hat += args.input_noise * torch.randn(*test_x[test_ixs].shape).to(device) # add noise, maybe
     test_loss = L2_loss(test_dxdt[test_ixs], test_dxdt_hat)
 
     # logging

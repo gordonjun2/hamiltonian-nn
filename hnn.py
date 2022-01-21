@@ -10,12 +10,12 @@ from utils import rk4
 class HNN(torch.nn.Module):
     '''Learn arbitrary vector fields that are sums of conservative and solenoidal fields'''
     def __init__(self, input_dim, differentiable_model, field_type='solenoidal',
-                    baseline=False, assume_canonical_coords=True):
+                    baseline=False, assume_canonical_coords=True, device = None):
         super(HNN, self).__init__()
         self.baseline = baseline
         self.differentiable_model = differentiable_model
         self.assume_canonical_coords = assume_canonical_coords
-        self.M = self.permutation_tensor(input_dim) # Levi-Civita permutation tensor
+        self.M = self.permutation_tensor(input_dim).to(device) # Levi-Civita permutation tensor
         self.field_type = field_type
 
     def forward(self, x):
@@ -38,15 +38,15 @@ class HNN(torch.nn.Module):
         '''NEURAL HAMILTONIAN-STLE VECTOR FIELD'''
         F1, F2 = self.forward(x) # traditional forward pass
 
-        conservative_field = torch.zeros_like(x) # start out with both components set to 0
-        solenoidal_field = torch.zeros_like(x)
+        conservative_field = torch.zeros_like(x).to(device) # start out with both components set to 0
+        solenoidal_field = torch.zeros_like(x).to(device)
 
         if self.field_type != 'solenoidal':
-            dF1 = torch.autograd.grad(F1.sum(), x, create_graph=True)[0] # gradients for conservative field
+            dF1 = torch.autograd.grad(F1.sum(), x, create_graph=True)[0].to(device) # gradients for conservative field
             conservative_field = dF1 @ torch.eye(*self.M.shape)
 
         if self.field_type != 'conservative':
-            dF2 = torch.autograd.grad(F2.sum(), x, create_graph=True)[0] # gradients for solenoidal field
+            dF2 = torch.autograd.grad(F2.sum(), x, create_graph=True)[0].to(device) # gradients for solenoidal field
             solenoidal_field = dF2 @ self.M.t()
 
         if separate_fields:

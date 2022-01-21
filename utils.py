@@ -110,3 +110,7 @@ def make_gif(frames, save_dir, name='pendulum', duration=1e-1, pixels=None, divi
 
     shutil.rmtree(temp_dir) # remove all the images
     return png_save_path
+
+def get_model_parm_nums(model):
+    total = sum([param.nelement() for param in model.parameters()])
+    return total
