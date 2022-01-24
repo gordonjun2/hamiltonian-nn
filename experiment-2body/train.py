@@ -52,13 +52,19 @@ def train(args):
             field_type=args.field_type, baseline=args.baseline, device = device)
 
   num_parm = get_model_parm_nums(model)
+  
+  print('\n')
   print('model contains {} parameters'.format(num_parm))
+  print('\n')
 
   optim = torch.optim.Adam(model.parameters(), args.learn_rate, weight_decay=0)
 
   # arrange data
   data = get_dataset(args.name, args.save_dir, verbose=True)
+
   x = torch.tensor( data['coords'], requires_grad=True, dtype=torch.float32).to(device)
+  # Each line of 'x' is in the form (qx1, qx2, qy1, qy2, px1, px2, py1, py2)
+    
   test_x = torch.tensor( data['test_coords'], requires_grad=True, dtype=torch.float32).to(device)
   dxdt = torch.Tensor(data['dcoords']).to(device)
   test_dxdt = torch.Tensor(data['test_dcoords']).to(device)
@@ -68,7 +74,10 @@ def train(args):
   for step in range(args.total_steps+1):
 
     # train step
+    
+    # 'torch.randperm(x.shape[0])' randomizes array index (shuffling) and '[:args.batch_size]' slices the first 'batch_size' array index for training
     ixs = torch.randperm(x.shape[0])[:args.batch_size]
+    
     dxdt_hat = model.time_derivative(x[ixs])
     dxdt_hat += args.input_noise * torch.randn(*x[ixs].shape).to(device) # add noise, maybe
     loss = L2_loss(dxdt[ixs], dxdt_hat)

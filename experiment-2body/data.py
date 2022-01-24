@@ -11,6 +11,9 @@ sys.path.append(parent_dir)
 
 from utils import to_pickle, from_pickle
 
+M_earth = 5.9742e+24
+G = 6.67384e-11
+
 ##### ENERGY #####
 def potential_energy(state):
     '''U=sum_i,j>i G m_i m_j / r_ij'''
@@ -18,8 +21,11 @@ def potential_energy(state):
     for i in range(state.shape[0]):
         for j in range(i+1,state.shape[0]):
             r_ij = ((state[i:i+1,1:3] - state[j:j+1,1:3])**2).sum(1, keepdims=True)**.5
+            # r_ij is the distance between the two bodies
             m_i = state[i:i+1,0:1]
+            # m_i is the mass of the first body
             m_j = state[j:j+1,0:1]
+            # m_j is the mass of the second body
     tot_energy += m_i * m_j / r_ij
     U = -tot_energy.sum(0).squeeze()
     return U
@@ -33,6 +39,26 @@ def kinetic_energy(state):
 def total_energy(state):
     return potential_energy(state) + kinetic_energy(state)
 
+def potential_energy_over_M_sat(state):
+    '''U=sum_i,j>i G m_i m_j / r_ij'''
+    tot_energy = np.zeros((1,1,state.shape[2]))
+    for i in range(state.shape[0]):
+        for j in range(i+1,state.shape[0]):
+            r_ij = ((state[i:i+1,0:3] - state[j:j+1,0:3])**2).sum(1, keepdims=True)**.5
+            # r_ij is the distance between the two bodies
+
+    tot_energy_over_M_sat += G * M_earth / r_ij
+    U = -tot_energy_over_M_sat.sum(0).squeeze()
+    return U_over_M_sat
+
+def kinetic_energy_over_M_sat(state):
+    '''T=sum_i .5*m*v^2'''
+    energies_over_M_sat = .5 * (state[:,3:6]**2).sum(1, keepdims=True)
+    T = energies_over_M_sat.sum(0).squeeze()
+    return T_over_M_sat
+
+def total_energy_over_M_sat(state):
+    return potential_energy_over_M_sat(state) + kinetic_energy_over_M_sat(state)
 
 ##### DYNAMICS #####
 def get_accelerations(state, epsilon=0):
@@ -107,29 +133,47 @@ def coords2state(coords, nbodies=2, mass=1):
 def sample_orbits(timesteps=50, trials=1000, nbodies=2, orbit_noise=5e-2,
                   min_radius=0.5, max_radius=1.5, t_span=[0, 20], verbose=False, **kwargs):
     
+    # timestep = no. of sample points in a trial (trajectory)
+    # trials = trajectories
+    
     orbit_settings = locals()
     if verbose:
         print("Making a dataset of near-circular 2-body orbits:")
     
     x, dx, e = [], [], []
     N = timesteps*trials
+    
+    # 'while' loop loops 'trials' times
     while len(x) < N:
 
+        # Initialize initial state
         state = random_config(orbit_noise, min_radius, max_radius)
+        # state is in (mass, position in x, position in y, momentum in x, momentum in y)
+        
+        # Calculate the full trajectory of the bodies within the time period of t_span
         orbit, settings = get_orbit(state, t_points=timesteps, t_span=t_span, **kwargs)
-        batch = orbit.transpose(2,0,1).reshape(-1,10)
+        
+        # Reshaped 'orbit' to be processed later
+        batch = orbit.transpose(2,0,1).reshape(-1, orbit.shape[0] * orbit.shape[1])
 
+        # 'for' loop loops 'timesteps' times
         for state in batch:
+            # Calculate instantaneous velocity and acceleration
             dstate = update(None, state)
             
             # reshape from [nbodies, state] where state=[m, qx, qy, px, py]
             # to [canonical_coords] = [qx1, qx2, qy1, qy2, px1,px2,....]
             coords = state.reshape(nbodies,5).T[1:].flatten()
             dcoords = dstate.reshape(nbodies,5).T[1:].flatten()
+            
+            # Save state in both non-canonical and canonical states
             x.append(coords)
             dx.append(dcoords)
 
+            # Reshape state back to original form for energy calculation
             shaped_state = state.copy().reshape(2,5,1)
+            
+            # Calculates energy at current timestep
             e.append(total_energy(shaped_state))
 
     data = {'coords': np.stack(x)[:N],
@@ -147,6 +191,8 @@ def make_orbits_dataset(test_split=0.2, **kwargs):
     split_data = {}
     for k, v in data.items():
         split_data[k], split_data['test_' + k] = v[split_ix:], v[:split_ix]
+        # Each 'k' is a key in 'data'
+        
     data = split_data
 
     data['meta'] = orbit_settings

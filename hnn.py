@@ -38,15 +38,15 @@ class HNN(torch.nn.Module):
         '''NEURAL HAMILTONIAN-STLE VECTOR FIELD'''
         F1, F2 = self.forward(x) # traditional forward pass
 
-        conservative_field = torch.zeros_like(x).to(device) # start out with both components set to 0
-        solenoidal_field = torch.zeros_like(x).to(device)
+        conservative_field = torch.zeros_like(x) # start out with both components set to 0
+        solenoidal_field = torch.zeros_like(x)
 
         if self.field_type != 'solenoidal':
-            dF1 = torch.autograd.grad(F1.sum(), x, create_graph=True)[0].to(device) # gradients for conservative field
+            dF1 = torch.autograd.grad(F1.sum(), x, create_graph=True)[0] # gradients for conservative field
             conservative_field = dF1 @ torch.eye(*self.M.shape)
 
         if self.field_type != 'conservative':
-            dF2 = torch.autograd.grad(F2.sum(), x, create_graph=True)[0].to(device) # gradients for solenoidal field
+            dF2 = torch.autograd.grad(F2.sum(), x, create_graph=True)[0] # gradients for solenoidal field
             solenoidal_field = dF2 @ self.M.t()
 
         if separate_fields:
