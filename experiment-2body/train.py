@@ -32,6 +32,7 @@ def get_args():
     parser.add_argument('--save_dir', default=THIS_DIR, type=str, help='where to save the trained model')
     parser.add_argument('--gpu_enable', dest='gpu_enable', action='store_true', help='include if gpu is to be used')
     parser.add_argument('--gpu_select', default=0, type=int, help='select which gpu to use')
+    parser.add_argument('--sat_problem', dest='sat_problem', action='store_true', help='set scenario to be Satellite Problem instead of Two-Body Problem as demonstrated in the paper')
     parser.set_defaults(feature=True)
     return parser.parse_args()
 
@@ -60,7 +61,7 @@ def train(args):
   optim = torch.optim.Adam(model.parameters(), args.learn_rate, weight_decay=0)
 
   # arrange data
-  data = get_dataset(args.name, args.save_dir, verbose=True)
+  data = get_dataset(args.name, args.save_dir, sat_problem = args.sat_problem, verbose=True)
 
   x = torch.tensor( data['coords'], requires_grad=True, dtype=torch.float32).to(device)
   # Each line of 'x' is in the form (qx1, qx2, qy1, qy2, px1, px2, py1, py2)

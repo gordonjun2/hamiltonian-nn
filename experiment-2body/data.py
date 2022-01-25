@@ -181,10 +181,71 @@ def sample_orbits(timesteps=50, trials=1000, nbodies=2, orbit_noise=5e-2,
             'energy': np.stack(e)[:N] }
     return data, orbit_settings
 
+def sgp4_generated_orbits(timesteps=50, trials=1000, nbodies=2, orbit_noise=5e-2,
+                  min_radius=0.5, max_radius=1.5, t_span=[0, 20], verbose=False, **kwargs):
+    
+    # timestep = no. of sample points in a trial (trajectory)
+    # trials = trajectories
+    # nbodies = 2
+    # orbit_noise = 5e-2
+    # min_radius = 0.5
+    # max_radius = 1.5
+    # t_span = [0, 20]
+    # verbose = False
+    # **kwargs
+    
+    orbit_settings = locals()
+    if verbose:
+        print("Making a dataset of near-circular 2-body orbits:")
+    
+    x, dx, e = [], [], []
+    N = timesteps*trials
+    
+    # 'while' loop loops 'trials' times
+    while len(x) < N:
+
+        # Initialize initial state
+        state = random_config(orbit_noise, min_radius, max_radius)
+        # state is in (mass, position in x, position in y, momentum in x, momentum in y)
+        
+        # Calculate the full trajectory of the bodies within the time period of t_span
+        orbit, settings = get_orbit(state, t_points=timesteps, t_span=t_span, **kwargs)
+        
+        # Reshaped 'orbit' to be processed later
+        batch = orbit.transpose(2,0,1).reshape(-1, orbit.shape[0] * orbit.shape[1])
+
+        # 'for' loop loops 'timesteps' times
+        for state in batch:
+            # Calculate instantaneous velocity and acceleration
+            dstate = update(None, state)
+            
+            # reshape from [nbodies, state] where state=[m, qx, qy, px, py]
+            # to [canonical_coords] = [qx1, qx2, qy1, qy2, px1,px2,....]
+            coords = state.reshape(nbodies,5).T[1:].flatten()
+            dcoords = dstate.reshape(nbodies,5).T[1:].flatten()
+            
+            # Save state in both non-canonical and canonical states
+            x.append(coords)
+            dx.append(dcoords)
+
+            # Reshape state back to original form for energy calculation
+            shaped_state = state.copy().reshape(2,5,1)
+            
+            # Calculates energy at current timestep
+            e.append(total_energy(shaped_state))
+
+    data = {'coords': np.stack(x)[:N],
+            'dcoords': np.stack(dx)[:N],
+            'energy': np.stack(e)[:N] }
+    return data, orbit_settings
+
 
 ##### MAKE A DATASET #####
-def make_orbits_dataset(test_split=0.2, **kwargs):
-    data, orbit_settings = sample_orbits(**kwargs)
+def make_orbits_dataset(sat_problem, test_split=0.2, **kwargs):
+    if not sat_problem:
+        data, orbit_settings = sample_orbits(**kwargs)
+    else:
+        data, orbit_settings = sgp4_generated_orbits(**kwargs)
     
     # make a train/test split
     split_ix = int(data['coords'].shape[0] * test_split)
@@ -200,18 +261,21 @@ def make_orbits_dataset(test_split=0.2, **kwargs):
 
 
 ##### LOAD OR SAVE THE DATASET #####
-def get_dataset(experiment_name, save_dir, **kwargs):
+def get_dataset(experiment_name, save_dir, sat_problem, **kwargs):
     '''Returns an orbital dataset. Also constructs
     the dataset if no saved version is available.'''
 
-    path = '{}/{}-orbits-dataset.pkl'.format(save_dir, experiment_name)
+    if not sat_problem:
+        path = '{}/{}-orbits-dataset.pkl'.format(save_dir, experiment_name)
+    else:
+        path = '{}/{}-satellite-orbits-dataset.pkl'.format(save_dir, experiment_name)
 
     try:
         data = from_pickle(path)
         print("Successfully loaded data from {}".format(path))
     except:
         print("Had a problem loading data from {}. Rebuilding dataset...".format(path))
-        data = make_orbits_dataset(**kwargs)
+        data = make_orbits_dataset(sat_problem, **kwargs)
         to_pickle(data, path)
 
     return data
