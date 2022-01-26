@@ -11,6 +11,8 @@ sys.path.append(parent_dir)
 
 from utils import to_pickle, from_pickle
 
+from torch.nn.utils.rnn import pad_sequence
+
 M_earth = 5.9742e+24
 G = 6.67384e-11
 
@@ -181,8 +183,90 @@ def sample_orbits(timesteps=50, trials=1000, nbodies=2, orbit_noise=5e-2,
             'energy': np.stack(e)[:N] }
     return data, orbit_settings
 
+# class LEOSGP4TrajectoriesDataset(Dataset):
+#     """
+#     CharacterTrajectories dataset.
+#     """
+#     def __init__(self, root_dir,
+#                  include_length=False, max_length=None):
+#         """
+#         args
+#           root_dir - where to look for the data or download it to
+#           position - whether to include the position values
+#           velocity - whether to include the velocity values
+#           max_length - cutoff for max number of steps, if None, use all (205)
+#           include_length - whether to include the original sequence length as an output (int)
+#                            if a max_length is given, return min(seq_length, max_length)
+#         """
+        
+#         self.root_dir = root_dir
+#         self.include_length = include_length
+        
+#         raw = loadmat(self.path_to_data)
+#         raw_data = raw['mixout'][0]
+#         self.int_labels = torch.LongTensor(raw['consts'][0][0][4][0])
+#         self.label_key = [(i,label[0]) for i,label in enumerate(raw['consts'][0][0][3][0])]
+        
+#         # pad to be the same length
+#         xs = []
+#         ys = []
+#         fs = []
+#         seq_length = []
+#         for ex in raw_data:
+#             xs.append(torch.tensor(ex[0]))
+#             ys.append(torch.tensor(ex[1]))
+#             fs.append(torch.tensor(ex[2]))
+#             seq_length.append(len(ex[0]))
+
+#         # need to pad them as separate sequences because it doesn't like padding 3-vectors directly
+#         padded_xs = pad_sequence(xs).permute(1,0)
+#         padded_ys = pad_sequence(ys).permute(1,0)
+#         padded_fs = pad_sequence(fs).permute(1,0)
+#         self.seq_length = seq_length
+#         if max_length is None:
+#             self.max_length = padded_xs.size()[-1]
+#         else:
+#             self.max_length = max_length
+#             padded_xs = padded_xs[:,:self.max_length]
+#             padded_ys = padded_ys[:,:self.max_length]
+#             padded_fs = padded_fs[:,:self.max_length]
+#         # make times
+#         self.times = torch.linspace(0,1,self.max_length).unsqueeze(-1)
+        
+#         # dimensions [batch, timestep, time and 3-velocity in x,y,force]
+#         padded = torch.stack([padded_xs, padded_ys, padded_fs], dim=2)
+        
+#         # position is the cumulative sum of velocity over time
+#         if position and velocity:
+#             self.states = torch.cat([padded, padded.cumsum(dim=1)], dim=-1)
+#         elif position:
+#             self.states = padded.cumsum(dim=1)
+#         elif velocity:
+#             self.states = padded
+#         else:
+#             raise Exception('Neither position nor velocity selected for Character data.')
+#         # rescale
+#         self.states = self.states[:, :, :2]
+#         self.states = 0.1*self.states.float()
+        
+#         self.data = []
+#         ts = torch.linspace(0, 1, 205).float()
+#         ts = ts.unsqueeze(1)
+#         for i in range(len(self.states)):
+#             self.data.append((ts, self.states[i]))
+#         self.data = self.data[:20000]
+
+#     def __getitem__(self, idx):
+#         if self.include_length:
+#             return self.times, self.states[idx], min(self.seq_length[idx], self.max_length)
+#         else:
+#             return self.data[idx]
+
+#     def __len__(self):
+#         return len(self.data)
+
 def sgp4_generated_orbits(timesteps=50, trials=1000, nbodies=2, orbit_noise=5e-2,
-                  min_radius=0.5, max_radius=1.5, t_span=[0, 20], verbose=False, **kwargs):
+                  min_radius=0.5, max_radius=1.5, t_span=[0, 20], verbose=False, max_length = None, **kwargs):
     
     # timestep = no. of sample points in a trial (trajectory)
     # trials = trajectories
@@ -196,23 +280,58 @@ def sgp4_generated_orbits(timesteps=50, trials=1000, nbodies=2, orbit_noise=5e-2
     
     orbit_settings = locals()
     if verbose:
-        print("Making a dataset of near-circular 2-body orbits:")
+        print("Retrieving the dataset of LEO SGP4 orbits:")
+        
+    data_root_dir = './Data_matlab/'
+    raw = loadmat(os.path.join(data_root_dir, 'data_GT_cell.mat'))
+    raw_data = pos_raw['data_GT_cell'][0]
+
+    # pad to be the same length
+    x = []
+    y = []
+    z = []
+    vx = []
+    vy = []
+    vz = []
+    
+    timesteps = []
+    for trajectory in raw_data:
+        x.append(torch.tensor(trajectory[0, :]))
+        y.append(torch.tensor(trajectory[1, :]))
+        z.append(torch.tensor(trajectory[2, :]))
+        vx.append(torch.tensor(trajectory[3, :]))
+        vy.append(torch.tensor(trajectory[4, :]))
+        vz.append(torch.tensor(trajectory[5, :]))
+        timesteps.append(len(trajectory[0, :]))
+
+    # need to pad them as separate sequences because it doesn't like padding 3-vectors directly
+    padded_x = pad_sequence(x).permute(1,0)
+    padded_y = pad_sequence(y).permute(1,0)
+    padded_z = pad_sequence(z).permute(1,0)
+    padded_vx = pad_sequence(x).permute(1,0)
+    padded_vy = pad_sequence(y).permute(1,0)
+    padded_vz = pad_sequence(z).permute(1,0)
+    
+    if max_length is not None:
+        # modify the length of the sequence according to preset max_length
+        padded_x = padded_x[:,:max_length]
+        padded_y = padded_y[:,:max_length]
+        padded_z = padded_z[:,:max_length]
+        padded_vx = padded_vx[:,:max_length]
+        padded_vy = padded_vy[:,:max_length]
+        padded_vz = padded_vz[:,:max_length]
+
+    # dimensions [batch, timestep, time and 3-velocity in x,y,force]
+    padded = torch.stack([padded_x, padded_y, padded_z, padded_vx, padded_vy, padded_vz], dim=2)
+
+    # CONTINUE HERE
     
     x, dx, e = [], [], []
+    
     N = timesteps*trials
     
     # 'while' loop loops 'trials' times
     while len(x) < N:
-
-        # Initialize initial state
-        state = random_config(orbit_noise, min_radius, max_radius)
-        # state is in (mass, position in x, position in y, momentum in x, momentum in y)
-        
-        # Calculate the full trajectory of the bodies within the time period of t_span
-        orbit, settings = get_orbit(state, t_points=timesteps, t_span=t_span, **kwargs)
-        
-        # Reshaped 'orbit' to be processed later
-        batch = orbit.transpose(2,0,1).reshape(-1, orbit.shape[0] * orbit.shape[1])
 
         # 'for' loop loops 'timesteps' times
         for state in batch:
