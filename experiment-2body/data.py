@@ -4,14 +4,15 @@
 import numpy as np
 import scipy
 solve_ivp = scipy.integrate.solve_ivp
+from scipy.io import loadmat
+import torch
+import math
 
 import os, sys
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(parent_dir)
 
 from utils import to_pickle, from_pickle
-
-from torch.nn.utils.rnn import pad_sequence
 
 M_earth = 5.9742e+24
 G = 6.67384e-11
@@ -41,22 +42,24 @@ def kinetic_energy(state):
 def total_energy(state):
     return potential_energy(state) + kinetic_energy(state)
 
+# let Earth's potential energy = 0 J
 def potential_energy_over_M_sat(state):
     '''U=sum_i,j>i G m_i m_j / r_ij'''
-    tot_energy = np.zeros((1,1,state.shape[2]))
+    pe_over_M_sat = np.zeros((1,1,state.shape[2]))
     for i in range(state.shape[0]):
         for j in range(i+1,state.shape[0]):
             r_ij = ((state[i:i+1,0:3] - state[j:j+1,0:3])**2).sum(1, keepdims=True)**.5
             # r_ij is the distance between the two bodies
 
-    tot_energy_over_M_sat += G * M_earth / r_ij
-    U = -tot_energy_over_M_sat.sum(0).squeeze()
+    pe_over_M_sat += G * M_earth / r_ij
+    U_over_M_sat = -pe_over_M_sat.sum(0).squeeze()
     return U_over_M_sat
 
+# let Earth's kinetic energy = 0 J
 def kinetic_energy_over_M_sat(state):
     '''T=sum_i .5*m*v^2'''
-    energies_over_M_sat = .5 * (state[:,3:6]**2).sum(1, keepdims=True)
-    T = energies_over_M_sat.sum(0).squeeze()
+    ke_over_M_sat = .5 * (state[:,3:6]**2).sum(1, keepdims=True)
+    T_over_M_sat = ke_over_M_sat.sum(0).squeeze()
     return T_over_M_sat
 
 def total_energy_over_M_sat(state):
@@ -82,6 +85,32 @@ def update(t, state):
     deriv = np.zeros_like(state)
     deriv[:,1:3] = state[:,3:5] # dx, dy = vx, vy
     deriv[:,3:5] = get_accelerations(state)
+    return deriv.reshape(-1)
+
+def get_accelerations_satellite(state, epsilon=0):
+    # shape of state is [bodies x properties]
+    net_accs = [] # [nbodies x 2]
+    for i in range(state.shape[0]): # number of bodies
+        other_bodies = np.concatenate([state[:i, :], state[i+1:, :]], axis=0)
+        displacements = other_bodies[:, 0:3] - state[i, 0:3] # indexes 1:4 -> pxs, pys, pzs
+        distances = (displacements**2).sum(1, keepdims=True)**0.5
+        #masses = other_bodies[:, 0:1]
+        if i == 0:
+            masses = [[M_earth]]
+        else:
+            # let satellite to have a mass of 0 kg here to prevent the Earth from moving in the simulation
+            masses = [[0]]              
+        pointwise_accs = masses * displacements / (distances**3 + epsilon) # G=1
+        net_acc = pointwise_accs.sum(0, keepdims=True)
+        net_accs.append(net_acc)
+    net_accs = np.concatenate(net_accs, axis=0)
+    return net_accs
+  
+def update_satellite(t, state):
+    state = state.reshape(-1,6) # [bodies, properties]
+    deriv = np.zeros_like(state)
+    deriv[:,0:3] = state[:,3:6] # dx, dy = vx, vy
+    deriv[:,3:6] = get_accelerations_satellite(state)
     return deriv.reshape(-1)
 
 
@@ -150,7 +179,7 @@ def sample_orbits(timesteps=50, trials=1000, nbodies=2, orbit_noise=5e-2,
 
         # Initialize initial state
         state = random_config(orbit_noise, min_radius, max_radius)
-        # state is in (mass, position in x, position in y, momentum in x, momentum in y)
+        # state is in (mass, position in x, position in y, momentum in x, momentum in y) x 2 rows (bodies)
         
         # Calculate the full trajectory of the bodies within the time period of t_span
         orbit, settings = get_orbit(state, t_points=timesteps, t_span=t_span, **kwargs)
@@ -183,188 +212,73 @@ def sample_orbits(timesteps=50, trials=1000, nbodies=2, orbit_noise=5e-2,
             'energy': np.stack(e)[:N] }
     return data, orbit_settings
 
-# class LEOSGP4TrajectoriesDataset(Dataset):
-#     """
-#     CharacterTrajectories dataset.
-#     """
-#     def __init__(self, root_dir,
-#                  include_length=False, max_length=None):
-#         """
-#         args
-#           root_dir - where to look for the data or download it to
-#           position - whether to include the position values
-#           velocity - whether to include the velocity values
-#           max_length - cutoff for max number of steps, if None, use all (205)
-#           include_length - whether to include the original sequence length as an output (int)
-#                            if a max_length is given, return min(seq_length, max_length)
-#         """
-        
-#         self.root_dir = root_dir
-#         self.include_length = include_length
-        
-#         raw = loadmat(self.path_to_data)
-#         raw_data = raw['mixout'][0]
-#         self.int_labels = torch.LongTensor(raw['consts'][0][0][4][0])
-#         self.label_key = [(i,label[0]) for i,label in enumerate(raw['consts'][0][0][3][0])]
-        
-#         # pad to be the same length
-#         xs = []
-#         ys = []
-#         fs = []
-#         seq_length = []
-#         for ex in raw_data:
-#             xs.append(torch.tensor(ex[0]))
-#             ys.append(torch.tensor(ex[1]))
-#             fs.append(torch.tensor(ex[2]))
-#             seq_length.append(len(ex[0]))
-
-#         # need to pad them as separate sequences because it doesn't like padding 3-vectors directly
-#         padded_xs = pad_sequence(xs).permute(1,0)
-#         padded_ys = pad_sequence(ys).permute(1,0)
-#         padded_fs = pad_sequence(fs).permute(1,0)
-#         self.seq_length = seq_length
-#         if max_length is None:
-#             self.max_length = padded_xs.size()[-1]
-#         else:
-#             self.max_length = max_length
-#             padded_xs = padded_xs[:,:self.max_length]
-#             padded_ys = padded_ys[:,:self.max_length]
-#             padded_fs = padded_fs[:,:self.max_length]
-#         # make times
-#         self.times = torch.linspace(0,1,self.max_length).unsqueeze(-1)
-        
-#         # dimensions [batch, timestep, time and 3-velocity in x,y,force]
-#         padded = torch.stack([padded_xs, padded_ys, padded_fs], dim=2)
-        
-#         # position is the cumulative sum of velocity over time
-#         if position and velocity:
-#             self.states = torch.cat([padded, padded.cumsum(dim=1)], dim=-1)
-#         elif position:
-#             self.states = padded.cumsum(dim=1)
-#         elif velocity:
-#             self.states = padded
-#         else:
-#             raise Exception('Neither position nor velocity selected for Character data.')
-#         # rescale
-#         self.states = self.states[:, :, :2]
-#         self.states = 0.1*self.states.float()
-        
-#         self.data = []
-#         ts = torch.linspace(0, 1, 205).float()
-#         ts = ts.unsqueeze(1)
-#         for i in range(len(self.states)):
-#             self.data.append((ts, self.states[i]))
-#         self.data = self.data[:20000]
-
-#     def __getitem__(self, idx):
-#         if self.include_length:
-#             return self.times, self.states[idx], min(self.seq_length[idx], self.max_length)
-#         else:
-#             return self.data[idx]
-
-#     def __len__(self):
-#         return len(self.data)
-
-def sgp4_generated_orbits(timesteps=50, trials=1000, nbodies=2, orbit_noise=5e-2,
-                  min_radius=0.5, max_radius=1.5, t_span=[0, 20], verbose=False, max_length = None, **kwargs):
+def sgp4_generated_orbits(data_percentage_usage, verbose=False, **kwargs):
     
-    # timestep = no. of sample points in a trial (trajectory)
-    # trials = trajectories
-    # nbodies = 2
-    # orbit_noise = 5e-2
-    # min_radius = 0.5
-    # max_radius = 1.5
-    # t_span = [0, 20]
-    # verbose = False
-    # **kwargs
-    
-    orbit_settings = locals()
     if verbose:
-        print("Retrieving the dataset of LEO SGP4 orbits:")
+        print("Retrieving the dataset of LEO SGP4 orbits ... \n")
         
     data_root_dir = './Data_matlab/'
-    raw = loadmat(os.path.join(data_root_dir, 'data_GT_cell.mat'))
-    raw_data = pos_raw['data_GT_cell'][0]
-
-    # pad to be the same length
-    x = []
-    y = []
-    z = []
-    vx = []
-    vy = []
-    vz = []
+    raw = loadmat(os.path.join(data_root_dir, 'data_GT_cell_100_ts.mat'))
     
-    timesteps = []
-    for trajectory in raw_data:
-        x.append(torch.tensor(trajectory[0, :]))
-        y.append(torch.tensor(trajectory[1, :]))
-        z.append(torch.tensor(trajectory[2, :]))
-        vx.append(torch.tensor(trajectory[3, :]))
-        vy.append(torch.tensor(trajectory[4, :]))
-        vz.append(torch.tensor(trajectory[5, :]))
-        timesteps.append(len(trajectory[0, :]))
+    raw_data = raw['data_GT_cell'][0]
+    indexes = torch.randperm(raw_data.shape[0])[:math.floor(raw_data.shape[0]*data_percentage_usage)]
+    raw_data = raw_data[indexes]
 
-    # need to pad them as separate sequences because it doesn't like padding 3-vectors directly
-    padded_x = pad_sequence(x).permute(1,0)
-    padded_y = pad_sequence(y).permute(1,0)
-    padded_z = pad_sequence(z).permute(1,0)
-    padded_vx = pad_sequence(x).permute(1,0)
-    padded_vy = pad_sequence(y).permute(1,0)
-    padded_vz = pad_sequence(z).permute(1,0)
-    
-    if max_length is not None:
-        # modify the length of the sequence according to preset max_length
-        padded_x = padded_x[:,:max_length]
-        padded_y = padded_y[:,:max_length]
-        padded_z = padded_z[:,:max_length]
-        padded_vx = padded_vx[:,:max_length]
-        padded_vy = padded_vy[:,:max_length]
-        padded_vz = padded_vz[:,:max_length]
-
-    # dimensions [batch, timestep, time and 3-velocity in x,y,force]
-    padded = torch.stack([padded_x, padded_y, padded_z, padded_vx, padded_vy, padded_vz], dim=2)
-
-    # CONTINUE HERE
-    
     x, dx, e = [], [], []
-    
-    N = timesteps*trials
-    
-    # 'while' loop loops 'trials' times
-    while len(x) < N:
 
-        # 'for' loop loops 'timesteps' times
+    earth_state = np.zeros((1, 6))
+
+    trajectory_count = 0
+
+    for trajectory in raw_data:
+        trajectory_count = trajectory_count + 1
+        print('Processing trajectory no. ' + str(trajectory_count) + '/' + str(raw_data.shape[0]))
+        first_state_flag = 1
+        for satellite_state in trajectory:
+            if first_state_flag == 1:
+                satellite_state = np.reshape(satellite_state, (1, -1))
+                state = np.transpose(np.stack((satellite_state, earth_state)), (1, 0, 2))
+                orbit = state
+                first_state_flag = 0
+            else:
+                satellite_state = np.reshape(satellite_state, (1, -1))
+                state = np.transpose(np.stack((satellite_state, earth_state)), (1, 0, 2))
+                orbit = np.concatenate((orbit, state))
+
+        batch = orbit.reshape(-1, orbit.shape[1] * orbit.shape[2])
+
         for state in batch:
             # Calculate instantaneous velocity and acceleration
-            dstate = update(None, state)
-            
-            # reshape from [nbodies, state] where state=[m, qx, qy, px, py]
-            # to [canonical_coords] = [qx1, qx2, qy1, qy2, px1,px2,....]
-            coords = state.reshape(nbodies,5).T[1:].flatten()
-            dcoords = dstate.reshape(nbodies,5).T[1:].flatten()
-            
+            dstate = update_satellite(None, state)
+
+            # reshape from [nbodies, state] where state=[m, qx, qy, qz, px, py, pz]
+            # to [canonical_coords] = [qx1, qx2, qy1, qy2, qz1, qz2, px1, px2,....]
+            coords = state.reshape(2,6).T[:].flatten()
+            dcoords = dstate.reshape(2,6).T[:].flatten()
+
             # Save state in both non-canonical and canonical states
             x.append(coords)
             dx.append(dcoords)
 
             # Reshape state back to original form for energy calculation
-            shaped_state = state.copy().reshape(2,5,1)
-            
-            # Calculates energy at current timestep
-            e.append(total_energy(shaped_state))
+            shaped_state = state.copy().reshape(2,6,1)
 
-    data = {'coords': np.stack(x)[:N],
-            'dcoords': np.stack(dx)[:N],
-            'energy': np.stack(e)[:N] }
-    return data, orbit_settings
+            # Calculates energy at current timestep
+            e.append(total_energy_over_M_sat(shaped_state))
+
+    data = {'coords': np.stack(x),
+            'dcoords': np.stack(dx),
+            'energy': np.stack(e)}
+    
+    return data
 
 
 ##### MAKE A DATASET #####
-def make_orbits_dataset(sat_problem, test_split=0.2, **kwargs):
-    if not sat_problem:
+def make_orbits_dataset(satellite_problem, data_percentage_usage, test_split=0.2, **kwargs):
+    if not satellite_problem:
         data, orbit_settings = sample_orbits(**kwargs)
     else:
-        data, orbit_settings = sgp4_generated_orbits(**kwargs)
+        data = sgp4_generated_orbits(data_percentage_usage, **kwargs)
     
     # make a train/test split
     split_ix = int(data['coords'].shape[0] * test_split)
@@ -374,17 +288,19 @@ def make_orbits_dataset(sat_problem, test_split=0.2, **kwargs):
         # Each 'k' is a key in 'data'
         
     data = split_data
+    
+    if not satellite_problem:
+        data['meta'] = orbit_settings
 
-    data['meta'] = orbit_settings
     return data
 
 
 ##### LOAD OR SAVE THE DATASET #####
-def get_dataset(experiment_name, save_dir, sat_problem, **kwargs):
+def get_dataset(experiment_name, save_dir, satellite_problem, data_percentage_usage, **kwargs):
     '''Returns an orbital dataset. Also constructs
     the dataset if no saved version is available.'''
 
-    if not sat_problem:
+    if not satellite_problem:
         path = '{}/{}-orbits-dataset.pkl'.format(save_dir, experiment_name)
     else:
         path = '{}/{}-satellite-orbits-dataset.pkl'.format(save_dir, experiment_name)
@@ -394,7 +310,7 @@ def get_dataset(experiment_name, save_dir, sat_problem, **kwargs):
         print("Successfully loaded data from {}".format(path))
     except:
         print("Had a problem loading data from {}. Rebuilding dataset...".format(path))
-        data = make_orbits_dataset(sat_problem, **kwargs)
+        data = make_orbits_dataset(satellite_problem, data_percentage_usage, **kwargs)
         to_pickle(data, path)
 
     return data

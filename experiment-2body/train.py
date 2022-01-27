@@ -27,12 +27,13 @@ def get_args():
     parser.add_argument('--name', default='2body', type=str, help='only one option right now')
     parser.add_argument('--baseline', dest='baseline', action='store_true', help='run baseline or experiment?')
     parser.add_argument('--verbose', dest='verbose', action='store_true', help='verbose?')
-    parser.add_argument('--field_type', default='solenoidal', type=str, help='type of vector field to learn')
+    parser.add_argument('--field_type', default='solenoidal', type=str, help='type of vector field to learn (solenoidal or conservative)')
     parser.add_argument('--seed', default=0, type=int, help='random seed')
     parser.add_argument('--save_dir', default=THIS_DIR, type=str, help='where to save the trained model')
     parser.add_argument('--gpu_enable', dest='gpu_enable', action='store_true', help='include if gpu is to be used')
     parser.add_argument('--gpu_select', default=0, type=int, help='select which gpu to use')
-    parser.add_argument('--sat_problem', dest='sat_problem', action='store_true', help='set scenario to be Satellite Problem instead of Two-Body Problem as demonstrated in the paper')
+    parser.add_argument('--satellite_problem', dest='satellite_problem', action='store_true', help='set scenario to be Satellite Problem instead of Two-Body Problem as demonstrated in the paper')
+    parser.add_argument('--data_percentage_usage', default=1, type=float, help='percentage of data to use (eg. 1 means all data)')
     parser.set_defaults(feature=True)
     return parser.parse_args()
 
@@ -61,10 +62,10 @@ def train(args):
   optim = torch.optim.Adam(model.parameters(), args.learn_rate, weight_decay=0)
 
   # arrange data
-  data = get_dataset(args.name, args.save_dir, sat_problem = args.sat_problem, verbose=True)
+  data = get_dataset(args.name, args.save_dir, satellite_problem = args.satellite_problem, data_percentage_usage = args.data_percentage_usage, verbose=True)
 
   x = torch.tensor( data['coords'], requires_grad=True, dtype=torch.float32).to(device)
-  # Each line of 'x' is in the form (qx1, qx2, qy1, qy2, px1, px2, py1, py2)
+  # Each line of 'x' is in the form (qx1, qx2, qy1, qy2, px1, px2, py1, py2) in original 2-body experiment and (qx1, qx2, qy1, qy2, qz1, qz2, px1, px2, py1, py2, pz1, pz2) in the satellite-problem experiment
     
   test_x = torch.tensor( data['test_coords'], requires_grad=True, dtype=torch.float32).to(device)
   dxdt = torch.Tensor(data['dcoords']).to(device)
@@ -78,7 +79,6 @@ def train(args):
     
     # 'torch.randperm(x.shape[0])' randomizes array index (shuffling) and '[:args.batch_size]' slices the first 'batch_size' array index for training
     ixs = torch.randperm(x.shape[0])[:args.batch_size]
-    
     dxdt_hat = model.time_derivative(x[ixs])
     dxdt_hat += args.input_noise * torch.randn(*x[ixs].shape).to(device) # add noise, maybe
     loss = L2_loss(dxdt[ixs], dxdt_hat)
