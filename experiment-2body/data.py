@@ -212,12 +212,12 @@ def sample_orbits(timesteps=50, trials=1000, nbodies=2, orbit_noise=5e-2,
             'energy': np.stack(e)[:N] }
     return data, orbit_settings
 
-def sgp4_generated_orbits(data_percentage_usage, verbose=False, **kwargs):
+def sgp4_generated_orbits(data_percentage_usage, save_dir, verbose=False, **kwargs):
     
     if verbose:
         print("Retrieving the dataset of LEO SGP4 orbits ... \n")
         
-    data_root_dir = './Data_matlab/'
+    data_root_dir = save_dir + '/Data_matlab/'
     raw = loadmat(os.path.join(data_root_dir, 'data_GT_cell_100_ts.mat'))
     
     raw_data = raw['data_GT_cell'][0]
@@ -274,11 +274,11 @@ def sgp4_generated_orbits(data_percentage_usage, verbose=False, **kwargs):
 
 
 ##### MAKE A DATASET #####
-def make_orbits_dataset(satellite_problem, data_percentage_usage, test_split=0.2, **kwargs):
+def make_orbits_dataset(satellite_problem, data_percentage_usage, save_dir, test_split=0.2, **kwargs):
     if not satellite_problem:
         data, orbit_settings = sample_orbits(**kwargs)
     else:
-        data = sgp4_generated_orbits(data_percentage_usage, **kwargs)
+        data = sgp4_generated_orbits(data_percentage_usage, save_dir, **kwargs)
     
     # make a train/test split
     split_ix = int(data['coords'].shape[0] * test_split)
@@ -310,7 +310,7 @@ def get_dataset(experiment_name, save_dir, satellite_problem, data_percentage_us
         print("Successfully loaded data from {}".format(path))
     except:
         print("Had a problem loading data from {}. Rebuilding dataset...".format(path))
-        data = make_orbits_dataset(satellite_problem, data_percentage_usage, **kwargs)
+        data = make_orbits_dataset(satellite_problem, data_percentage_usage, save_dir, **kwargs)
         to_pickle(data, path)
 
     return data
