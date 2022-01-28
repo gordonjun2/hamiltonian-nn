@@ -69,13 +69,19 @@ def train(args):
 
   # arrange data
   data = get_dataset(args.name, args.save_dir, satellite_problem = args.satellite_problem, data_percentage_usage = args.data_percentage_usage, verbose=True)
-
-  x = torch.tensor( data['coords'], requires_grad=True, dtype=torch.float32).to(device)
-  # Each line of 'x' is in the form (qx1, qx2, qy1, qy2, px1, px2, py1, py2) in original 2-body experiment and (qx1, qx2, qy1, qy2, qz1, qz2, px1, px2, py1, py2, pz1, pz2) in the satellite-problem experiment
     
-  test_x = torch.tensor( data['test_coords'], requires_grad=True, dtype=torch.float32).to(device)
-  dxdt = torch.Tensor(data['dcoords']).to(device)
-  test_dxdt = torch.Tensor(data['test_dcoords']).to(device)
+  if args.satellite_problem:
+    x = torch.tensor( data[0]['coords'], requires_grad=True, dtype=torch.float32).to(device)
+    # Each line of 'x' is in the form (qx1, qx2, qy1, qy2, px1, px2, py1, py2) in original 2-body experiment and (qx1, qx2, qy1, qy2, qz1, qz2, px1, px2, py1, py2, pz1, pz2) in the satellite-problem experiment
+    test_x = torch.tensor( data[0]['test_coords'], requires_grad=True, dtype=torch.float32).to(device)
+    dxdt = torch.Tensor(data[0]['dcoords']).to(device)
+    test_dxdt = torch.Tensor(data[0]['test_dcoords']).to(device)
+  else:
+    x = torch.tensor( data['coords'], requires_grad=True, dtype=torch.float32).to(device)
+    # Each line of 'x' is in the form (qx1, qx2, qy1, qy2, px1, px2, py1, py2) in original 2-body experiment and (qx1, qx2, qy1, qy2, qz1, qz2, px1, px2, py1, py2, pz1, pz2) in the satellite-problem experiment
+    test_x = torch.tensor( data['test_coords'], requires_grad=True, dtype=torch.float32).to(device)
+    dxdt = torch.Tensor(data['dcoords']).to(device)
+    test_dxdt = torch.Tensor(data['test_dcoords']).to(device)
 
   # vanilla train loop
   stats = {'train_loss': [], 'test_loss': []}

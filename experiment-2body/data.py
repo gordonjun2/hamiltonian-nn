@@ -66,7 +66,10 @@ def kinetic_energy_over_M_sat(state):
     return T_over_M_sat
 
 def total_energy_over_M_sat(state):
-    return potential_energy_over_M_sat(state) + kinetic_energy_over_M_sat(state)
+    PE = potential_energy_over_M_sat(state)
+    KE = kinetic_energy_over_M_sat(state)
+    TE = PE + KE
+    return TE, KE, PE
 
 ##### DYNAMICS #####
 def get_accelerations(state, epsilon=0):
@@ -235,6 +238,8 @@ def sgp4_generated_orbits(data_percentage_usage, save_dir, verbose=False, **kwar
     orbits = []
     
     timesteps_lengths = []
+    norm_KE_list = []
+    norm_PE_list = []
 
     earth_state = np.zeros((1, 6))
     
@@ -292,7 +297,10 @@ def sgp4_generated_orbits(data_percentage_usage, save_dir, verbose=False, **kwar
             norm_shaped_state = norm_state.copy().reshape(2,6,1)
 
             # Calculates energy at current timestep
-            norm_e.append(total_energy_over_M_sat(norm_shaped_state))
+            norm_TE, norm_KE, norm_PE = total_energy_over_M_sat(norm_shaped_state)
+            norm_e.append(norm_TE)
+            norm_KE_list.append(norm_KE)
+            norm_PE_list.append(norm_PE)
 
     norm_coords_arr = np.stack(norm_x)
     norm_dcoords_arr = np.stack(norm_dx)
@@ -300,10 +308,16 @@ def sgp4_generated_orbits(data_percentage_usage, save_dir, verbose=False, **kwar
     
     data = {'coords': norm_coords_arr,
             'dcoords': norm_dcoords_arr,
-            'energy': norm_e_arr,
-            'lengths': timesteps_lengths}
+            'energy': norm_e_arr}
     
-    return data
+    aux_data = {'coords': norm_coords_arr,
+                'dcoords': norm_dcoords_arr,
+                'energy': norm_e_arr,
+                'ke': norm_KE_list,
+                'pe': norm_PE_list,
+                'lengths': timesteps_lengths}
+    
+    return data, aux_data
 
 
 ##### MAKE A DATASET #####
@@ -311,23 +325,22 @@ def make_orbits_dataset(satellite_problem, data_percentage_usage, save_dir, test
     if not satellite_problem:
         data, orbit_settings = sample_orbits(**kwargs)
     else:
-        data = sgp4_generated_orbits(data_percentage_usage, save_dir, **kwargs)
+        data, aux_data = sgp4_generated_orbits(data_percentage_usage, save_dir, **kwargs)
     
     # make a train/test split
     split_ix = int(data['coords'].shape[0] * test_split)
     split_data = {}
     for k, v in data.items():
-        print(k)
-        print(v)
         split_data[k], split_data['test_' + k] = v[split_ix:], v[:split_ix]
         # Each 'k' is a key in 'data'
     
-    data = split_data
-    
     if not satellite_problem:
+        data = split_data
         data['meta'] = orbit_settings
-
-    return data
+        return data
+    else:
+        data = split_data
+        return [data, aux_data]
 
 
 ##### LOAD OR SAVE THE DATASET #####
