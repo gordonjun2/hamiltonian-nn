@@ -16,9 +16,9 @@ from utils import L2_loss, to_pickle, from_pickle, get_model_parm_nums
 
 def get_args():
     parser = argparse.ArgumentParser(description=None)
-    parser.add_argument('--input_dim', default=2*4, type=int, help='dimensionality of input tensor')
-    parser.add_argument('--hidden_dim', default=200, type=int, help='hidden dimension of mlp')
-    parser.add_argument('--learn_rate', default=1e-3, type=float, help='learning rate')
+    #parser.add_argument('--input_dim', default=2*4, type=int, help='dimensionality of input tensor')
+    parser.add_argument('--hidden_dim', default=200, type=int, help='hidden dimension of mlp')   # original default is 200
+    parser.add_argument('--learn_rate', default=1e-3, type=float, help='learning rate')          # original default is 1e-3
     parser.add_argument('--batch_size', default=200, type=int, help='batch_size')
     parser.add_argument('--input_noise', default=0.0, type=int, help='std of noise added to inputs')
     parser.add_argument('--nonlinearity', default='tanh', type=str, help='neural net nonlinearity')
@@ -48,9 +48,15 @@ def train(args):
   if args.verbose:
     print("Training baseline model:" if args.baseline else "Training HNN model:")
 
-  output_dim = args.input_dim if args.baseline else 2
-  nn_model = MLP(args.input_dim, args.hidden_dim, output_dim, args.nonlinearity).to(device)
-  model = HNN(args.input_dim, differentiable_model=nn_model,
+  if args.satellite_problem:
+    output_dim = 2*6 if args.baseline else 2
+    nn_model = MLP(2*6, args.hidden_dim, output_dim, args.nonlinearity).to(device)
+    model = HNN(2*6, differentiable_model=nn_model,
+            field_type=args.field_type, baseline=args.baseline, device = device)
+  else:
+    output_dim = 2*4 if args.baseline else 2
+    nn_model = MLP(2*4, args.hidden_dim, output_dim, args.nonlinearity).to(device)
+    model = HNN(2*4, differentiable_model=nn_model,
             field_type=args.field_type, baseline=args.baseline, device = device)
 
   num_parm = get_model_parm_nums(model)
@@ -81,6 +87,9 @@ def train(args):
     ixs = torch.randperm(x.shape[0])[:args.batch_size]
     dxdt_hat = model.time_derivative(x[ixs])
     dxdt_hat += args.input_noise * torch.randn(*x[ixs].shape).to(device) # add noise, maybe
+    if args.verbose and step % args.print_every == 0:
+        print('\nExample Training Ground Truth: ', dxdt[ixs][0])
+        print('\nExample Training Prediction: ', dxdt_hat[0])
     loss = L2_loss(dxdt[ixs], dxdt_hat)
     loss.backward()
     grad = torch.cat([p.grad.flatten() for p in model.parameters()]).clone()
@@ -90,20 +99,23 @@ def train(args):
     test_ixs = torch.randperm(test_x.shape[0])[:args.batch_size]
     test_dxdt_hat = model.time_derivative(test_x[test_ixs])
     test_dxdt_hat += args.input_noise * torch.randn(*test_x[test_ixs].shape).to(device) # add noise, maybe
+    if args.verbose and step % args.print_every == 0:
+        print('\nExample Testing Ground Truth: ', test_dxdt[test_ixs][0])
+        print('\nExample Testing Prediction: ', test_dxdt_hat[0])
     test_loss = L2_loss(test_dxdt[test_ixs], test_dxdt_hat)
 
     # logging
     stats['train_loss'].append(loss.item())
     stats['test_loss'].append(test_loss.item())
     if args.verbose and step % args.print_every == 0:
-      print("step {}, train_loss {:.4e}, test_loss {:.4e}, grad norm {:.4e}, grad std {:.4e}"
+      print("\nstep {}, train_loss {:.4e}, test_loss {:.4e}, grad norm {:.4e}, grad std {:.4e}"
           .format(step, loss.item(), test_loss.item(), grad@grad, grad.std()))
 
   train_dxdt_hat = model.time_derivative(x)
   train_dist = (dxdt - train_dxdt_hat)**2
   test_dxdt_hat = model.time_derivative(test_x)
   test_dist = (test_dxdt - test_dxdt_hat)**2
-  print('Final train loss {:.4e} +/- {:.4e}\nFinal test loss {:.4e} +/- {:.4e}'
+  print('\nFinal train loss {:.4e} +/- {:.4e}\nFinal test loss {:.4e} +/- {:.4e}\n'
     .format(train_dist.mean().item(), train_dist.std().item()/np.sqrt(train_dist.shape[0]),
             test_dist.mean().item(), test_dist.std().item()/np.sqrt(test_dist.shape[0])))
   return model, stats
@@ -115,5 +127,8 @@ if __name__ == "__main__":
     # save
     os.makedirs(args.save_dir) if not os.path.exists(args.save_dir) else None
     label = 'baseline' if args.baseline else 'hnn'
-    path = '{}/{}-orbits-{}.tar'.format(args.save_dir, args.name, label)
+    if args.satellite_problem:
+        path = '{}/{}-satellite-orbits-{}.tar'.format(args.save_dir, args.name, label)
+    else:
+        path = '{}/{}-orbits-{}.tar'.format(args.save_dir, args.name, label)
     torch.save(model.state_dict(), path)

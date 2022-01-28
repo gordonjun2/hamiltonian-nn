@@ -14,8 +14,11 @@ sys.path.append(parent_dir)
 
 from utils import to_pickle, from_pickle
 
-M_earth = 5.9742e+24
-G = 6.67384e-11
+# M_earth = 5.9742e+24
+# G = 6.67384e-11
+
+M_earth = 1
+G = 1
 
 ##### ENERGY #####
 def potential_energy(state):
@@ -107,7 +110,7 @@ def get_accelerations_satellite(state, epsilon=0):
     return net_accs
   
 def update_satellite(t, state):
-    state = state.reshape(-1,6) # [bodies, properties]
+#     state = state.reshape(-1,6) # [bodies, properties]
     deriv = np.zeros_like(state)
     deriv[:,0:3] = state[:,3:6] # dx, dy = vx, vy
     deriv[:,3:6] = get_accelerations_satellite(state)
@@ -218,16 +221,23 @@ def sgp4_generated_orbits(data_percentage_usage, save_dir, verbose=False, **kwar
         print("Retrieving the dataset of LEO SGP4 orbits ... \n")
         
     data_root_dir = save_dir + '/Data_matlab/'
-    raw = loadmat(os.path.join(data_root_dir, 'data_GT_cell_100_ts.mat'))
+    raw = loadmat(os.path.join(data_root_dir, 'data_GT_cell_200_ts.mat'))
     
     raw_data = raw['data_GT_cell'][0]
     indexes = torch.randperm(raw_data.shape[0])[:math.floor(raw_data.shape[0]*data_percentage_usage)]
     raw_data = raw_data[indexes]
-
-    x, dx, e = [], [], []
+    
+    xyz_pos = []
+    xyz_vel = []
+    
+    norm_x, norm_dx, norm_e = [], [], []
+    
+    orbits = []
+    
+    timesteps_lengths = []
 
     earth_state = np.zeros((1, 6))
-
+    
     trajectory_count = 0
 
     for trajectory in raw_data:
@@ -236,39 +246,62 @@ def sgp4_generated_orbits(data_percentage_usage, save_dir, verbose=False, **kwar
         first_state_flag = 1
         for satellite_state in trajectory:
             if first_state_flag == 1:
+                xyz_pos.append(satellite_state[0:3])
+                xyz_vel.append(satellite_state[3:6])
                 satellite_state = np.reshape(satellite_state, (1, -1))
                 state = np.transpose(np.stack((satellite_state, earth_state)), (1, 0, 2))
                 orbit = state
                 first_state_flag = 0
             else:
+                xyz_pos.append(satellite_state[0:3])
+                xyz_vel.append(satellite_state[3:6])
                 satellite_state = np.reshape(satellite_state, (1, -1))
                 state = np.transpose(np.stack((satellite_state, earth_state)), (1, 0, 2))
                 orbit = np.concatenate((orbit, state))
 
-        batch = orbit.reshape(-1, orbit.shape[1] * orbit.shape[2])
-
-        for state in batch:
+        orbits.append(orbit.reshape(-1, orbit.shape[1] * orbit.shape[2]))
+        
+    max_abs_pos = max(abs(np.array(xyz_pos).flatten()))
+    max_abs_vel = max(abs(np.array(xyz_vel).flatten()))
+    
+    for orbit in orbits:
+        timesteps_lengths.append(orbit.shape[0])
+        for state in orbit:
+            state = state.reshape(-1,6)
+            
+            pos_state_arr = state[:, 0:3]
+            vel_state_arr = state[:, 3:6]
+            norm_pos_state_arr = pos_state_arr / max_abs_pos
+            norm_vel_state_arr = vel_state_arr / max_abs_vel
+            
+            norm_state = np.concatenate((norm_pos_state_arr, norm_vel_state_arr), axis=1)
+            
             # Calculate instantaneous velocity and acceleration
-            dstate = update_satellite(None, state)
-
+            norm_dstate = update_satellite(None, norm_state)
+            
             # reshape from [nbodies, state] where state=[m, qx, qy, qz, px, py, pz]
             # to [canonical_coords] = [qx1, qx2, qy1, qy2, qz1, qz2, px1, px2,....]
-            coords = state.reshape(2,6).T[:].flatten()
-            dcoords = dstate.reshape(2,6).T[:].flatten()
-
+            norm_coords = norm_state.reshape(2,6).T[:].flatten()
+            norm_dcoords = norm_dstate.reshape(2,6).T[:].flatten()
+            
             # Save state in both non-canonical and canonical states
-            x.append(coords)
-            dx.append(dcoords)
-
+            norm_x.append(norm_coords)
+            norm_dx.append(norm_dcoords)
+            
             # Reshape state back to original form for energy calculation
-            shaped_state = state.copy().reshape(2,6,1)
+            norm_shaped_state = norm_state.copy().reshape(2,6,1)
 
             # Calculates energy at current timestep
-            e.append(total_energy_over_M_sat(shaped_state))
+            norm_e.append(total_energy_over_M_sat(norm_shaped_state))
 
-    data = {'coords': np.stack(x),
-            'dcoords': np.stack(dx),
-            'energy': np.stack(e)}
+    norm_coords_arr = np.stack(norm_x)
+    norm_dcoords_arr = np.stack(norm_dx)
+    norm_e_arr = np.stack(norm_e)
+    
+    data = {'coords': norm_coords_arr,
+            'dcoords': norm_dcoords_arr,
+            'energy': norm_e_arr,
+            'lengths': timesteps_lengths}
     
     return data
 
@@ -284,9 +317,11 @@ def make_orbits_dataset(satellite_problem, data_percentage_usage, save_dir, test
     split_ix = int(data['coords'].shape[0] * test_split)
     split_data = {}
     for k, v in data.items():
+        print(k)
+        print(v)
         split_data[k], split_data['test_' + k] = v[split_ix:], v[:split_ix]
         # Each 'k' is a key in 'data'
-        
+    
     data = split_data
     
     if not satellite_problem:
@@ -309,8 +344,9 @@ def get_dataset(experiment_name, save_dir, satellite_problem, data_percentage_us
         data = from_pickle(path)
         print("Successfully loaded data from {}".format(path))
     except:
-        print("Had a problem loading data from {}. Rebuilding dataset...".format(path))
+        print("Had a problem loading data from {}. Rebuilding dataset ...".format(path))
         data = make_orbits_dataset(satellite_problem, data_percentage_usage, save_dir, **kwargs)
         to_pickle(data, path)
+        print('\nSuccessfully processed and saved data ...')
 
     return data
