@@ -136,6 +136,21 @@ def get_orbit(state, update_fn=update, t_points=100, t_span=[0,2], **kwargs):
     orbit = path['y'].reshape(nbodies, 5, t_points)
     return orbit, orbit_settings
 
+def get_sgp4_orbit(state, update_fn=update, t_points=100, t_span=[0,2], **kwargs):
+    if not 'rtol' in kwargs.keys():
+        kwargs['rtol'] = 1e-9
+
+    orbit_settings = locals()
+
+    nbodies = state.shape[0]
+    t_eval = np.linspace(t_span[0], t_span[1], t_points)
+    orbit_settings['t_eval'] = t_eval
+
+    path = solve_ivp(fun=update_fn, t_span=t_span, y0=state.flatten(),
+                     t_eval=t_eval, **kwargs)
+    orbit = path['y'].reshape(nbodies, 7, t_points)
+    return orbit, orbit_settings
+
 
 ##### INITIALIZE THE TWO BODIES #####
 def random_config(orbit_noise=5e-2, min_radius=0.5, max_radius=1.5):
@@ -163,6 +178,24 @@ def coords2state(coords, nbodies=2, mass=1):
     state = state.reshape(-1, nbodies, timesteps).transpose(1,0,2)
     mass_vec = mass * np.ones((nbodies, 1, timesteps))
     state = np.concatenate([mass_vec, state], axis=1)
+    return state
+
+def coords2state_sgp4(coords):
+    qx1 = coords[0]
+    qx2 = coords[1]
+    qy1 = coords[2]
+    qy2 = coords[3]
+    qz1 = coords[4]
+    qz2 = coords[5]
+    px1 = coords[6]
+    px2 = coords[7]
+    py1 = coords[8]
+    py2 = coords[9]
+    pz1 = coords[10]
+    pz2 = coords[11]
+    
+    state = np.array([[0, qx1, qy1, qz1, px1, py1, pz1], [1, qx2, qy2, qz2, px2, py2, pz2]])
+    
     return state
 
 
@@ -315,7 +348,9 @@ def sgp4_generated_orbits(data_percentage_usage, save_dir, verbose=False, **kwar
                 'energy': norm_e_arr,
                 'ke': norm_KE_list,
                 'pe': norm_PE_list,
-                'lengths': timesteps_lengths}
+                'lengths': timesteps_lengths,
+                'max_abs_pos': max_abs_pos,
+                'max_abs_vel': max_abs_vel}
     
     return data, aux_data
 
