@@ -194,7 +194,7 @@ def coords2state_sgp4(coords):
     pz1 = coords[10]
     pz2 = coords[11]
     
-    state = np.array([[0, qx1, qy1, qz1, px1, py1, pz1], [1, qx2, qy2, qz2, px2, py2, pz2]])
+    state = torch.tensor([[0, qx1, qy1, qz1, px1, py1, pz1], [1, qx2, qy2, qz2, px2, py2, pz2]])
     
     return state
 
@@ -251,12 +251,12 @@ def sample_orbits(timesteps=50, trials=1000, nbodies=2, orbit_noise=5e-2,
             'energy': np.stack(e)[:N] }
     return data, orbit_settings
 
-def sgp4_generated_orbits(data_percentage_usage, save_dir, verbose=False, **kwargs):
+def sgp4_generated_orbits(data_percentage_usage, exp_dir, verbose=False, **kwargs):
     
     if verbose:
         print("Retrieving the dataset of LEO SGP4 orbits ... \n")
         
-    data_root_dir = save_dir + '/Data_matlab/'
+    data_root_dir = exp_dir + '/Data_matlab/'
     raw = loadmat(os.path.join(data_root_dir, 'data_GT_cell_200_ts.mat'))
     
     raw_data = raw['data_GT_cell'][0]
@@ -356,11 +356,11 @@ def sgp4_generated_orbits(data_percentage_usage, save_dir, verbose=False, **kwar
 
 
 ##### MAKE A DATASET #####
-def make_orbits_dataset(satellite_problem, data_percentage_usage, save_dir, test_split=0.2, **kwargs):
+def make_orbits_dataset(satellite_problem, data_percentage_usage, exp_dir, test_split=0.2, **kwargs):
     if not satellite_problem:
         data, orbit_settings = sample_orbits(**kwargs)
     else:
-        data, aux_data = sgp4_generated_orbits(data_percentage_usage, save_dir, **kwargs)
+        data, aux_data = sgp4_generated_orbits(data_percentage_usage, exp_dir, **kwargs)
     
     # make a train/test split
     split_ix = int(data['coords'].shape[0] * test_split)
@@ -379,21 +379,21 @@ def make_orbits_dataset(satellite_problem, data_percentage_usage, save_dir, test
 
 
 ##### LOAD OR SAVE THE DATASET #####
-def get_dataset(experiment_name, save_dir, satellite_problem, data_percentage_usage, **kwargs):
+def get_dataset(experiment_name, exp_dir, satellite_problem, data_percentage_usage, **kwargs):
     '''Returns an orbital dataset. Also constructs
     the dataset if no saved version is available.'''
 
     if not satellite_problem:
-        path = '{}/{}-orbits-dataset.pkl'.format(save_dir, experiment_name)
+        path = '{}/{}-orbits-dataset.pkl'.format(exp_dir, experiment_name)
     else:
-        path = '{}/{}-satellite-orbits-dataset.pkl'.format(save_dir, experiment_name)
+        path = '{}/{}-satellite-orbits-dataset.pkl'.format(exp_dir, experiment_name)
 
     try:
         data = from_pickle(path)
         print("Successfully loaded data from {}".format(path))
     except:
         print("Had a problem loading data from {}. Rebuilding dataset ...".format(path))
-        data = make_orbits_dataset(satellite_problem, data_percentage_usage, save_dir, **kwargs)
+        data = make_orbits_dataset(satellite_problem, data_percentage_usage, exp_dir, **kwargs)
         to_pickle(data, path)
         print('\nSuccessfully processed and saved data ...')
 
