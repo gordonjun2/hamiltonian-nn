@@ -14,7 +14,7 @@ To train a Hamiltonian Neural Network (HNN):
  * Task 1: Ideal mass-spring system: `python3 experiment-spring/train.py --verbose`
  * Task 2: Ideal pendulum: `python3 experiment-pend/train.py --verbose`
  * Task 3: Real pendulum (from this [Science](http://science.sciencemag.org/content/324/5923/81) paper): `python3 experiment-real/train.py --verbose`
- * Task 4: Two-body problem: `python3 experiment-2body/train.py --verbose --gpu_enable`
+ * Task 4: Two-body problem: `python3 experiment-2body/train.py --verbose --gpu_enable --save_best_weights --data_percentage_usage 0.5 --satellite_problem --epoch 1`
  * Task 4b: Three-body problem: `python3 experiment-3body/train.py --verbose`
  * Task 5: Pixel pendulum (from OpenAI Gym): `python3 experiment-pixels/train.py --verbose`
 

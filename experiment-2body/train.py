@@ -15,6 +15,8 @@ from data import get_dataset, get_sgp4_orbit, coords2state_sgp4
 from utils import L2_loss, to_pickle, from_pickle, get_model_parm_nums
 
 from tensorboardX import SummaryWriter       # importing tensorboard
+import random
+import math
 
 # for integrating a vector field parameterized by a NN or HNN
 def model_update(t, state, model, device):
@@ -38,7 +40,7 @@ def get_args():
     parser.add_argument('--input_noise', default=0.0, type=int, help='std of noise added to inputs')
     parser.add_argument('--nonlinearity', default='tanh', type=str, help='neural net nonlinearity')
     parser.add_argument('--total_steps', default=10000, type=int, help='number of gradient steps')
-    parser.add_argument('--print_every', default=200, type=int, help='number of gradient steps between prints')
+    parser.add_argument('--print_every', default=800, type=int, help='number of gradient steps between prints')
     parser.add_argument('--name', default='2body', type=str, help='only one option right now')
     parser.add_argument('--baseline', dest='baseline', action='store_true', help='run baseline or experiment?')
     parser.add_argument('--verbose', dest='verbose', action='store_true', help='verbose?')
@@ -54,25 +56,30 @@ def get_args():
     parser.set_defaults(feature=True)
     return parser.parse_args()
 
-def train(args, save_dir, tb):
+def train(args, save_dir, tb, label, test_split=0.2):
   # set random seed
   torch.manual_seed(args.seed)
   np.random.seed(args.seed)
 
+  # initialise device
   device = torch.device('cuda:' + str(args.gpu_select) if args.gpu_enable else 'cpu')
 
+  # parameters to test
   hidden_dim_list = [250]
-  learn_rate_list = [1e-4]
+  learn_rate_list = [1e-3]
   batch_size_list = [300]
   
-
+  # initialise infinity loss first
   best_test_loss = float('inf')
+    
+  trial_no = 0
 
   for hidden_dim in hidden_dim_list:
     for learn_rate in learn_rate_list:
       for batch_size in batch_size_list:
         
-
+          trial_no = trial_no + 1
+   
           # init model and optimizer
           if args.verbose:
             print("Training baseline model:" if args.baseline else "Training HNN model:")
@@ -105,6 +112,7 @@ def train(args, save_dir, tb):
             dxdt = torch.Tensor(data[0]['dcoords']).to(device)
             test_dxdt = torch.Tensor(data[0]['test_dcoords']).to(device)
             
+            # a list of lengths of every trajectory
             lengths = data[1]['lengths']
             
           else:
@@ -114,7 +122,6 @@ def train(args, save_dir, tb):
             dxdt = torch.Tensor(data['dcoords']).to(device)
             test_dxdt = torch.Tensor(data['test_dcoords']).to(device)
 
-          # vanilla train loop
           stats = {'train_loss': [], 'test_loss': []}
             
           if not args.satellite_problem:
@@ -154,10 +161,8 @@ def train(args, save_dir, tb):
                       .format(step, loss.item(), test_loss.item(), grad@grad, grad.std()))
                 if args.save_best_weights and step % args.print_every == 0:
                     if test_loss.item() < best_test_loss:
-                        if args.satellite_problem:
-                            path = '{}/{}-satellite-orbits-{}-step={}.tar'.format(save_dir, args.name, label, step)
-                        else:
-                            path = '{}/{}-orbits-{}-step-{}.tar'.format(save_dir, args.name, label, step)
+                        path = '{}/{}-orbits-{}-step-{}.tar'.format(save_dir, args.name, label, step)
+                        torch.save(model.state_dict(), path)
                         best_test_loss = test_loss.item()
 
               train_dxdt_hat = model.time_derivative(x)
@@ -169,55 +174,94 @@ def train(args, save_dir, tb):
                         test_dist.mean().item(), test_dist.std().item()/np.sqrt(test_dist.shape[0])))
             
           else:
-              trajectory_start = 0
-              lengths_num = len(lengths)
+              train_lengths_num = math.ceil(len(lengths) - len(lengths)*test_split)
+              test_lengths_num = math.floor(len(lengths)*test_split)
+              train_trajectory_start = test_lengths_num
+                
+              step = 0
             
               for epoch_no in range(args.epoch):
-                for trajectory_no in range(lengths_num):
-                    trajectory_end = trajectory_start + lengths[trajectory_no]
-                    trajectory_states = x[trajectory_start:trajectory_end, :]
+                for trajectory_no in range(train_lengths_num):
+                    # train step for position
                     
-                    # CONTINUE HERE
-                    print(torch.norm(trajectory_states[1][0,2,4]))
+                    train_trajectory_end = train_trajectory_start + lengths[test_lengths_num + trajectory_no]
+                    trajectory_states = x[train_trajectory_start:train_trajectory_end, :]
                     
-                    t_points = trajectory_end - trajectory_start
+                    t_points = train_trajectory_end - train_trajectory_start
                     t_span = [1, t_points]
-
-                    initial_coord = x[trajectory_start]
-
+                    initial_coord = x[train_trajectory_start]
                     state = coords2state_sgp4(initial_coord)
-
                     update_fn = lambda t, y0: model_update(t, y0, model, device)
                     hnn_orbit, settings = get_sgp4_orbit(state, t_points=t_points, t_span=t_span, update_fn=update_fn)
-
                     hnn_orbit_pos = hnn_orbit[0].T[:, [1, 2, 3]]
-                    # CONTINUE HERE
-                    print(linalg.norm(hnn_orbit_pos))
                     
-                    trajectory_start = trajectory_end + 1
+                    next_true_pos = trajectory_states[:, [0, 2, 4]]
+                    next_predicted_pos = torch.tensor(hnn_orbit_pos).to(device)
                     
-                    # train step
-
-                    # 'torch.randperm(x.shape[0])' randomizes array index (shuffling) and '[:args.batch_size]' slices the first 'batch_size' array index for training
-                    ixs = torch.randperm(x.shape[0])[:batch_size]
-                    dxdt_hat = model.time_derivative(x[trajectory_start:trajectory_end, :])
-                    dxdt_hat += args.input_noise * torch.randn(*x[trajectory_start:trajectory_end, :].shape).to(device) # add noise, maybe
-        #             if args.verbose and step % args.print_every == 0:
-        #                 print('\nExample Training Ground Truth: ', dxdt[ixs][0])
-        #                 print('\nExample Training Prediction: ', dxdt_hat[0])
-                    loss = L2_loss(dxdt[ixs], dxdt_hat)
+#                     if args.verbose and step % args.print_every == 0:
+#                         print('\nExample Training Ground Truth: ', next_true_pos)
+#                         print('\nExample Training Prediction: ', next_predicted_pos)
+                  
+                    loss_pos = L2_loss(next_true_pos, next_predicted_pos)
+                
+                    # train step for position derivatives
+                    
+                    dxdt_hat = model.time_derivative(x[train_trajectory_start:train_trajectory_end, :])
+                    dxdt_hat += args.input_noise * torch.randn(*x[train_trajectory_start:train_trajectory_end, :].shape).to(device) # add noise, maybe
+                    
+#                     if args.verbose and step % args.print_every == 0:
+#                         print('\nExample Training Ground Truth: ', dxdt[ixs][0])
+#                         print('\nExample Training Prediction: ', dxdt_hat[0])
+        
+                    loss_dxdt = L2_loss(dxdt[train_trajectory_start:train_trajectory_end, :], dxdt_hat)
+        
+                    loss = loss_pos + loss_dxdt
                     loss.backward()
                     grad = torch.cat([p.grad.flatten() for p in model.parameters()]).clone()
                     optim.step() ; optim.zero_grad()
 
                     # run test data
-                    test_ixs = torch.randperm(test_x.shape[0])[:batch_size]
-                    test_dxdt_hat = model.time_derivative(test_x[test_ixs])
-                    test_dxdt_hat += args.input_noise * torch.randn(*test_x[test_ixs].shape).to(device) # add noise, maybe
+                    index = random.randint(0, test_lengths_num-1)
+                    n = 0
+                    test_trajectory_start = 0
+                    while n < index:
+                        test_trajectory_start = test_trajectory_start + lengths[n]
+                        n = n + 1
+                    test_trajectory_end = test_trajectory_start + lengths[index]
+                    
+                    # test step for position
+                    
+                    trajectory_states = x[test_trajectory_start:test_trajectory_end, :]
+                    
+                    t_points = test_trajectory_end - test_trajectory_start
+                    t_span = [1, t_points]
+                    initial_coord = x[test_trajectory_start]
+                    state = coords2state_sgp4(initial_coord)
+                    update_fn = lambda t, y0: model_update(t, y0, model, device)
+                    hnn_orbit, settings = get_sgp4_orbit(state, t_points=t_points, t_span=t_span, update_fn=update_fn)
+                    hnn_orbit_pos = hnn_orbit[0].T[:, [1, 2, 3]]
+                    
+                    next_true_pos = trajectory_states[:, [0, 2, 4]]
+                    next_predicted_pos = torch.tensor(hnn_orbit_pos).to(device)
+                    
+#                     if args.verbose and step % args.print_every == 0:
+#                         print('\nExample Training Ground Truth: ', next_true_pos)
+#                         print('\nExample Training Prediction: ', next_predicted_pos)
+                  
+                    test_loss_pos = L2_loss(next_true_pos, next_predicted_pos)
+                    
+                    # test step for position derivatives
+                    
+                    test_dxdt_hat = model.time_derivative(test_x[test_trajectory_start:test_trajectory_end, :])
+                    test_dxdt_hat += args.input_noise * torch.randn(*test_x[test_trajectory_start:test_trajectory_end, :].shape).to(device) # add noise, maybe
+                    
         #             if args.verbose and step % args.print_every == 0:
         #                 print('\nExample Testing Ground Truth: ', test_dxdt[test_ixs][0])
         #                 print('\nExample Testing Prediction: ', test_dxdt_hat[0])
-                    test_loss = L2_loss(test_dxdt[test_ixs], test_dxdt_hat)
+        
+                    test_loss_dxdt = L2_loss(test_dxdt[test_trajectory_start:test_trajectory_end, :], test_dxdt_hat)
+            
+                    test_loss = test_loss_pos + test_loss_dxdt
 
                     # logging
                     stats['train_loss'].append(loss.item())
@@ -231,19 +275,18 @@ def train(args, save_dir, tb):
                           .format(step, loss.item(), test_loss.item(), grad@grad, grad.std()))
                     if args.save_best_weights and step % args.print_every == 0:
                         if test_loss.item() < best_test_loss:
-                            if args.satellite_problem:
-                                path = '{}/{}-satellite-orbits-{}-step={}.tar'.format(save_dir, args.name, label, step)
-                            else:
-                                path = '{}/{}-orbits-{}-step-{}.tar'.format(save_dir, args.name, label, step)
+                            path = '{}/{}-satellite-orbits-{}-step={}-trial={}.tar'.format(save_dir, args.name, label, step, trial_no)
+                            torch.save(model.state_dict(), path)
                             best_test_loss = test_loss.item()
+                            
+                    train_trajectory_start = train_trajectory_end + 1
+                    step = step + 1
 
-              train_dxdt_hat = model.time_derivative(x)
-              train_dist = (dxdt - train_dxdt_hat)**2
-              test_dxdt_hat = model.time_derivative(test_x)
-              test_dist = (test_dxdt - test_dxdt_hat)**2
-              print('\nFinal train loss {:.4e} +/- {:.4e}\nFinal test loss {:.4e} +/- {:.4e}\n'
-                .format(train_dist.mean().item(), train_dist.std().item()/np.sqrt(train_dist.shape[0]),
-                        test_dist.mean().item(), test_dist.std().item()/np.sqrt(test_dist.shape[0])))
+#               train_dxdt_hat = model.time_derivative(x)
+#               train_dist = (dxdt - train_dxdt_hat)**2
+#               test_dxdt_hat = model.time_derivative(test_x)
+#               test_dist = (test_dxdt - test_dxdt_hat)**2
+              print('\nBest test loss {:.4e}\n'.format(best_test_loss))
             
   return model, stats
 
@@ -268,10 +311,11 @@ if __name__ == "__main__":
     os.makedirs(args.exp_dir) if not os.path.exists(args.exp_dir) else None
     save_dir = args.exp_dir + '/pretrained_models'
     os.makedirs(save_dir) if not os.path.exists(save_dir) else None
-    model, stats = train(args, save_dir, tb)
+    
+    label = 'baseline' if args.baseline else 'hnn'
+    model, stats = train(args, save_dir, tb, label)
 
     # save
-    label = 'baseline' if args.baseline else 'hnn'
     if args.satellite_problem:
         path = '{}/{}-satellite-orbits-{}-step-last.tar'.format(save_dir, args.name, label)
     else:
