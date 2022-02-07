@@ -359,21 +359,35 @@ def sgp4_generated_orbits(data_percentage_usage, exp_dir, verbose=False, **kwarg
 def make_orbits_dataset(satellite_problem, data_percentage_usage, exp_dir, test_split=0.2, **kwargs):
     if not satellite_problem:
         data, orbit_settings = sample_orbits(**kwargs)
-    else:
-        data, aux_data = sgp4_generated_orbits(data_percentage_usage, exp_dir, **kwargs)
-    
-    # make a train/test split
-    split_ix = int(data['coords'].shape[0] * test_split)
-    split_data = {}
-    for k, v in data.items():
-        split_data[k], split_data['test_' + k] = v[split_ix:], v[:split_ix]
-        # Each 'k' is a key in 'data'
-    
-    if not satellite_problem:
+        
+        # make a train/test split
+        split_ix = int(data['coords'].shape[0] * test_split)
+        split_data = {}
+        for k, v in data.items():
+            split_data[k], split_data['test_' + k] = v[split_ix:], v[:split_ix]
+            # Each 'k' is a key in 'data'
+            
         data = split_data
         data['meta'] = orbit_settings
         return data
+            
     else:
+        data, aux_data = sgp4_generated_orbits(data_percentage_usage, exp_dir, **kwargs)
+        train_lengths_num = math.ceil(len(aux_data['lengths']) - len(aux_data['lengths'])*test_split)
+        test_lengths_num = math.floor(len(aux_data['lengths'])*test_split)
+        
+        n = 0
+        test_sample_end = 0
+        
+        while n < test_lengths_num:
+            test_sample_end = test_sample_end + aux_data['lengths'][n]
+            n = n + 1
+   
+        split_data = {}
+        for k, v in data.items():
+            split_data[k], split_data['test_' + k] = v[test_sample_end:], v[:test_sample_end]
+            # Each 'k' is a key in 'data'
+
         data = split_data
         return [data, aux_data]
 
