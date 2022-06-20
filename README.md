@@ -1,3 +1,10 @@
+#Installation
+=======
+
+1. This project uses Python 3.7.12.
+2. Use `pip install torch==1.8.1+cu111 torchvision==0.9.1+cu111 torchaudio==0.8.1 -f https://download.pytorch.org/whl/torch_stable.html`
+3. Use `pip install -r requirements.txt`
+
 Hamiltonian Neural Networks
 =======
 Sam Greydanus, Misko Dzamba, Jason Yosinski | 2019
